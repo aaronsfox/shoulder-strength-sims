@@ -12,8 +12,272 @@ Set of functions that can be used to assist in processing data within OpenSim
 import btk
 import opensim as osim
 import os
+import math
 import numpy as np
 from scipy import signal
+from scipy.optimize import fsolve
+
+# %% Function to add shoulder and elbow joint centres
+
+def addFunctionalJointCentres(trialC3D, shoulderC3D = None, elbowC3D = None):
+    
+    #Initialise a file reader
+    reader = btk.btkAcquisitionFileReader()
+    
+    #Start with the shoulder joint centre
+    
+    #Load in SCoRE c3d file
+    reader.SetFilename(shoulderC3D)
+    
+    #Update reader
+    reader.Update()
+    
+    #Get the btk acquisition object
+    acq = reader.GetOutput()
+    
+    #Get number of frames
+    nFrames = acq.GetPointFrameNumber()
+    
+    #Get the shoulder joint centre marker
+    SJCmrkr = np.empty([nFrames,3])
+    SJCmrkr[:,0] = acq.GetPoint('Thorax_UpperArm.R_score').GetValues()[:,0]
+    SJCmrkr[:,1] = acq.GetPoint('Thorax_UpperArm.R_score').GetValues()[:,1]
+    SJCmrkr[:,2] = acq.GetPoint('Thorax_UpperArm.R_score').GetValues()[:,2]
+    
+    #Get the three markers to use to calculate joint centre position
+    #These will be: R.PUA.Top, R.LUA.Top, R.LUA.Right
+    Amrkr = np.empty([nFrames,3])
+    Amrkr[:,0] = acq.GetPoint('R.PUA.Top').GetValues()[:,0]
+    Amrkr[:,1] = acq.GetPoint('R.PUA.Top').GetValues()[:,1]
+    Amrkr[:,2] = acq.GetPoint('R.PUA.Top').GetValues()[:,2]
+    Bmrkr = np.empty([nFrames,3])
+    Bmrkr[:,0] = acq.GetPoint('R.LUA.Top').GetValues()[:,0]
+    Bmrkr[:,1] = acq.GetPoint('R.LUA.Top').GetValues()[:,1]
+    Bmrkr[:,2] = acq.GetPoint('R.LUA.Top').GetValues()[:,2]
+    Cmrkr = np.empty([nFrames,3])
+    Cmrkr[:,0] = acq.GetPoint('R.LUA.Right').GetValues()[:,0]
+    Cmrkr[:,1] = acq.GetPoint('R.LUA.Right').GetValues()[:,1]
+    Cmrkr[:,2] = acq.GetPoint('R.LUA.Right').GetValues()[:,2]
+    
+    #Calculate the distance between the markers at each frame
+    distA = np.empty([nFrames,1]); distB = np.empty([nFrames,1]); distC = np.empty([nFrames,1])
+    for p in range(0,nFrames-1):
+        distA[p,0] = math.sqrt((SJCmrkr[p,0] - Amrkr[p,0])**2 + (SJCmrkr[p,1] - Amrkr[p,1])**2 + (SJCmrkr[p,2] - Amrkr[p,2])**2)
+        distB[p,0] = math.sqrt((SJCmrkr[p,0] - Bmrkr[p,0])**2 + (SJCmrkr[p,1] - Bmrkr[p,1])**2 + (SJCmrkr[p,2] - Bmrkr[p,2])**2)
+        distC[p,0] = math.sqrt((SJCmrkr[p,0] - Cmrkr[p,0])**2 + (SJCmrkr[p,1] - Cmrkr[p,1])**2 + (SJCmrkr[p,2] - Cmrkr[p,2])**2)
+    
+    #Calculate average distances
+    distA_avg = np.mean(distA); distB_avg = np.mean(distB); distC_avg = np.mean(distC)
+    
+    #Read in the experimental data c3d file
+    readerExp = btk.btkAcquisitionFileReader()
+    
+    #Load in experimental c3d trial
+    readerExp.SetFilename(trialC3D)
+    
+    #Update reader
+    readerExp.Update()
+    
+    #Get the btk acquisition object
+    acqExp = readerExp.GetOutput()
+    
+    #Get number of frames
+    nFramesExp = acqExp.GetPointFrameNumber()
+    
+    #Extract the same markers used for calculating distance from the experimental data
+    AmrkrExp = np.empty([nFramesExp,3])
+    AmrkrExp[:,0] = acqExp.GetPoint('R.PUA.Top').GetValues()[:,0]
+    AmrkrExp[:,1] = acqExp.GetPoint('R.PUA.Top').GetValues()[:,1]
+    AmrkrExp[:,2] = acqExp.GetPoint('R.PUA.Top').GetValues()[:,2]
+    BmrkrExp = np.empty([nFramesExp,3])
+    BmrkrExp[:,0] = acqExp.GetPoint('R.LUA.Top').GetValues()[:,0]
+    BmrkrExp[:,1] = acqExp.GetPoint('R.LUA.Top').GetValues()[:,1]
+    BmrkrExp[:,2] = acqExp.GetPoint('R.LUA.Top').GetValues()[:,2]
+    CmrkrExp = np.empty([nFramesExp,3])
+    CmrkrExp[:,0] = acqExp.GetPoint('R.LUA.Right').GetValues()[:,0]
+    CmrkrExp[:,1] = acqExp.GetPoint('R.LUA.Right').GetValues()[:,1]
+    CmrkrExp[:,2] = acqExp.GetPoint('R.LUA.Right').GetValues()[:,2]
+    
+    #Use the experimental marker data and calculated distances to solve the distance
+    #equations for the XYZ positions of the shoulder joint centre in the experimental
+    #trial. For the first frame, we'll use the average joint centre position from 
+    #the circumduction trial. On later frames we'll use the previous frames position.
+    
+    #Define the initial guess for shoulder joint centre on the first frame
+    initialGuess = [np.mean(SJCmrkr[:,0]),np.mean(SJCmrkr[:,1]),np.mean(SJCmrkr[:,2])]
+    
+    #Initialise empty array for SJC experimental data
+    SJCmrkrExp = np.empty([nFramesExp,3])
+    
+    #Loop through experimental trial frames and calculate SJC position
+    for frameNo in range(0,nFramesExp):
+        
+        #Define the marker positions for below solver equations
+        xA = AmrkrExp[frameNo,0]; yA = AmrkrExp[frameNo,1]; zA = AmrkrExp[frameNo,2];
+        xB = BmrkrExp[frameNo,0]; yB = BmrkrExp[frameNo,1]; zB = BmrkrExp[frameNo,2];
+        xC = CmrkrExp[frameNo,0]; yC = CmrkrExp[frameNo,1]; zC = CmrkrExp[frameNo,2];
+        
+        #Define a function that expresses the equations
+        def f(p):
+            x,y,z = p
+            #Define functions
+            fA = ((x - xA)**2 + (y - yA)**2 + (z - zA)**2) - distA_avg**2
+            fB = ((x - xB)**2 + (y - yB)**2 + (z - zB)**2) - distB_avg**2
+            fC = ((x - xC)**2 + (y - yC)**2 + (z - zC)**2) - distC_avg**2
+            return [fA,fB,fC]
+        
+        #Test function with values
+        #print(f([30,40,50]))
+        
+        #Check whether to update initial guess
+        if frameNo != 0:
+            #Update initial guess
+            initialGuess = [SJCmrkrExp[frameNo-1,0],SJCmrkrExp[frameNo-1,1],SJCmrkrExp[frameNo-1,2]]
+            
+        #Solve equation for current marker position
+        SJCmrkrExp[frameNo,0],SJCmrkrExp[frameNo,1],SJCmrkrExp[frameNo,2] = fsolve(f,initialGuess)
+        
+        #Cleanup
+        #del(xA,xB,xC,yA,yB,yC,zA,zB,zC)
+    
+    #Add new marker back into c3d data as R.SJC
+        
+    #Create new empty point
+    newPoint = btk.btkPoint(acqExp.GetPointFrameNumber())
+    #Set label on new point
+    newPoint.SetLabel('R.SJC')
+    #Set values for new marker from those calculated
+    newPoint.SetValues(SJCmrkrExp)
+    #Append new point to acquisition object
+    acqExp.AppendPoint(newPoint)
+    
+    #Re-run the above process to do the elbow joint centre
+    
+    #Initialise a file reader
+    reader = btk.btkAcquisitionFileReader()
+    
+    #Start with the shoulder joint centre
+    
+    #Load in SCoRE c3d file
+    reader.SetFilename(elbowC3D)
+    
+    #Update reader
+    reader.Update()
+    
+    #Get the btk acquisition object
+    acq = reader.GetOutput()
+    
+    #Get number of frames
+    nFrames = acq.GetPointFrameNumber()
+    
+    #Get the shoulder joint centre marker
+    EJCmrkr = np.empty([nFrames,3])
+    EJCmrkr[:,0] = acq.GetPoint('UpperArm.R_ForeArm.R_score').GetValues()[:,0]
+    EJCmrkr[:,1] = acq.GetPoint('UpperArm.R_ForeArm.R_score').GetValues()[:,1]
+    EJCmrkr[:,2] = acq.GetPoint('UpperArm.R_ForeArm.R_score').GetValues()[:,2]
+    
+    #Get the three markers to use to calculate joint centre position
+    #These will be: R.FA.Top, R.FA.Left, R.FA.Right
+    Amrkr = np.empty([nFrames,3])
+    Amrkr[:,0] = acq.GetPoint('R.FA.Top').GetValues()[:,0]
+    Amrkr[:,1] = acq.GetPoint('R.FA.Top').GetValues()[:,1]
+    Amrkr[:,2] = acq.GetPoint('R.FA.Top').GetValues()[:,2]
+    Bmrkr = np.empty([nFrames,3])
+    Bmrkr[:,0] = acq.GetPoint('R.FA.Left').GetValues()[:,0]
+    Bmrkr[:,1] = acq.GetPoint('R.FA.Left').GetValues()[:,1]
+    Bmrkr[:,2] = acq.GetPoint('R.FA.Left').GetValues()[:,2]
+    Cmrkr = np.empty([nFrames,3])
+    Cmrkr[:,0] = acq.GetPoint('R.FA.Right').GetValues()[:,0]
+    Cmrkr[:,1] = acq.GetPoint('R.FA.Right').GetValues()[:,1]
+    Cmrkr[:,2] = acq.GetPoint('R.FA.Right').GetValues()[:,2]
+    
+    #Calculate the distance between the markers at each frame
+    distA = np.empty([nFrames,1]); distB = np.empty([nFrames,1]); distC = np.empty([nFrames,1])
+    for p in range(0,nFrames-1):
+        distA[p,0] = math.sqrt((EJCmrkr[p,0] - Amrkr[p,0])**2 + (EJCmrkr[p,1] - Amrkr[p,1])**2 + (EJCmrkr[p,2] - Amrkr[p,2])**2)
+        distB[p,0] = math.sqrt((EJCmrkr[p,0] - Bmrkr[p,0])**2 + (EJCmrkr[p,1] - Bmrkr[p,1])**2 + (EJCmrkr[p,2] - Bmrkr[p,2])**2)
+        distC[p,0] = math.sqrt((EJCmrkr[p,0] - Cmrkr[p,0])**2 + (EJCmrkr[p,1] - Cmrkr[p,1])**2 + (EJCmrkr[p,2] - Cmrkr[p,2])**2)
+    
+    #Calculate average distances
+    distA_avg = np.mean(distA); distB_avg = np.mean(distB); distC_avg = np.mean(distC)
+    
+    #Extract the same markers used for calculating distance from the experimental data
+    AmrkrExp = np.empty([nFramesExp,3])
+    AmrkrExp[:,0] = acqExp.GetPoint('R.FA.Top').GetValues()[:,0]
+    AmrkrExp[:,1] = acqExp.GetPoint('R.FA.Top').GetValues()[:,1]
+    AmrkrExp[:,2] = acqExp.GetPoint('R.FA.Top').GetValues()[:,2]
+    BmrkrExp = np.empty([nFramesExp,3])
+    BmrkrExp[:,0] = acqExp.GetPoint('R.FA.Left').GetValues()[:,0]
+    BmrkrExp[:,1] = acqExp.GetPoint('R.FA.Left').GetValues()[:,1]
+    BmrkrExp[:,2] = acqExp.GetPoint('R.FA.Left').GetValues()[:,2]
+    CmrkrExp = np.empty([nFramesExp,3])
+    CmrkrExp[:,0] = acqExp.GetPoint('R.FA.Right').GetValues()[:,0]
+    CmrkrExp[:,1] = acqExp.GetPoint('R.FA.Right').GetValues()[:,1]
+    CmrkrExp[:,2] = acqExp.GetPoint('R.FA.Right').GetValues()[:,2]
+    
+    #Use the experimental marker data and calculated distances to solve the distance
+    #equations for the XYZ positions of the shoulder joint centre in the experimental
+    #trial. For the first frame, we'll use the average joint centre position from 
+    #the elbow flexion trial. On later frames we'll use the previous frames position.
+    
+    #Define the initial guess for shoulder joint centre on the first frame
+    initialGuess = [np.mean(EJCmrkr[:,0]),np.mean(EJCmrkr[:,1]),np.mean(EJCmrkr[:,2])]
+    
+    #Initialise empty array for SJC experimental data
+    EJCmrkrExp = np.empty([nFramesExp,3])
+    
+    #Loop through experimental trial frames and calculate SJC position
+    for frameNo in range(0,nFramesExp):
+        
+        #Define the marker positions for below solver equations
+        xA = AmrkrExp[frameNo,0]; yA = AmrkrExp[frameNo,1]; zA = AmrkrExp[frameNo,2];
+        xB = BmrkrExp[frameNo,0]; yB = BmrkrExp[frameNo,1]; zB = BmrkrExp[frameNo,2];
+        xC = CmrkrExp[frameNo,0]; yC = CmrkrExp[frameNo,1]; zC = CmrkrExp[frameNo,2];
+        
+        #Define a function that expresses the equations
+        def f(p):
+            x,y,z = p
+            #Define functions
+            fA = ((x - xA)**2 + (y - yA)**2 + (z - zA)**2) - distA_avg**2
+            fB = ((x - xB)**2 + (y - yB)**2 + (z - zB)**2) - distB_avg**2
+            fC = ((x - xC)**2 + (y - yC)**2 + (z - zC)**2) - distC_avg**2
+            return [fA,fB,fC]
+        
+        #Test function with values
+        #print(f([30,40,50]))
+        
+        #Check whether to update initial guess
+        if frameNo != 0:
+            #Update initial guess
+            initialGuess = [EJCmrkrExp[frameNo-1,0],EJCmrkrExp[frameNo-1,1],EJCmrkrExp[frameNo-1,2]]
+            
+        #Solve equation for current marker position
+        EJCmrkrExp[frameNo,0],EJCmrkrExp[frameNo,1],EJCmrkrExp[frameNo,2] = fsolve(f,initialGuess)
+        
+        #Cleanup
+        #del(xA,xB,xC,yA,yB,yC,zA,zB,zC)
+    
+    #Add new marker back into c3d data as R.EJC
+        
+    #Create new empty point
+    newPoint2 = btk.btkPoint(acqExp.GetPointFrameNumber())
+    #Set label on new point
+    newPoint2.SetLabel('R.EJC')
+    #Set values for new marker from those calculated
+    newPoint2.SetValues(EJCmrkrExp)
+    #Append new point to acquisition object
+    acqExp.AppendPoint(newPoint2)
+    
+    #Write new c3d file
+    writerExp = btk.btkAcquisitionFileWriter()
+    writerExp.SetInput(acqExp)
+    writerExp.SetFilename(trialC3D[0:-4] + '_withJointCentres.c3d')
+    writerExp.Update()
+    
+    ###### The above adds the new R.SJC marker into the same c3d file
+    ###### can do the same for elbow joint centre
+    
+    return('Functional joint centres added')
 
 # %% Function to convert c3d to trc file using btk module
 
@@ -133,12 +397,16 @@ def btk_c3d2trc(fullFile, markerList, filtFreq = None):
     #Return to starting directory
     os.chdir(home_dir)
     
+    return('C3D file successfully converted to TRC')
+    
 # %% Function to set-up and run a scale tool
     
 def setup_ScaleTool(genericModelFile = None, markerFile = None, outputDir = None,
                     modelName = 'ScaledModel', participantMass = -1, preserveMass = True,
                     measurementSetFile = None, markerPlacerFile = None,
                     printToFile = False):
+    
+    ####### ADD PROMPT DIALOGS IF FILES AREN'T PRESENT (I.E. STILL NONE)...
     
     #Initialise scale tool
     scaler = osim.ScaleTool()
@@ -214,7 +482,8 @@ def setup_ScaleTool(genericModelFile = None, markerFile = None, outputDir = None
     #Run scale tool
     scaler.run()
     
+    return('Scaling completed')
+    
 # %%    
-
 
 
