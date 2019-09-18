@@ -1,2 +1,4 @@
 Manuscript/
 Code/Supplementary/*.pyc
+err.log
+out.log
