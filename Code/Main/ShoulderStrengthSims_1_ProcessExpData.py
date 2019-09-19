@@ -12,12 +12,13 @@ the path that includes the experimental data folder)
 
 #Import modules
 import os
+import btk
 import opensim as osim
 import numpy as np
 os.chdir('Code\Supplementary')
 import osimHelperFunctions as osimHelper
+import c3dHelperFunctions as c3dHelper
 os.chdir('..\..')
-import btk
 
 # %% Scale model
 
@@ -25,7 +26,7 @@ import btk
 os.chdir('ExpData')
 
 #Add the functional joint centres to the static calibration trial ('Cal_Horizontal01.c3d')
-osimHelper.addFunctionalJointCentres('Cal_Horizontal01.c3d', shoulderC3D = 'Circumduction01.c3d', elbowC3D = 'ElbowFlex01.c3d', filtFreq = 6)
+c3dHelper.addFunctionalJointCentres('Cal_Horizontal01.c3d', shoulderC3D = 'Circumduction01.c3d', elbowC3D = 'ElbowFlex01.c3d', filtFreq = 6)
 
 #Scale model from calibration trial
 
@@ -35,7 +36,7 @@ staticMarkerList = ['R.ACR','L.ACR','R.SJC','MCLAV','C7','T10','R.PUA.Top',
               'R.PUA.Left','R.PUA.Right','R.LUA.Top','R.LUA.Left',
               'R.LUA.Right','R.LELB','R.MELB','R.EJC','R.MWRI','R.LWRI',
               'R.FA.Top','R.FA.Left','R.FA.Right','R.FIN5','R.FIN1','R.HAND']
-osimHelper.btk_c3d2trc(staticC3D,staticMarkerList)
+c3dHelper.c3d2trc(staticC3D,staticMarkerList)
 
 #Scaling inputs
 os.chdir('..\ModelFiles')
@@ -69,7 +70,7 @@ Also need to scale muscle strength here
 os.chdir('..\ExpData')
 
 #Create list of trial names
-trialList = list(['UpwardReach9002'])
+trialList = list(['UpwardReach9001','UpwardReach9002'])
 
 ##### TO DO: Loop the IK across the different experimental data files...
 
@@ -78,16 +79,19 @@ for t in range(0,len(trialList)):
     #Set current trial name
     trialName = trialList[t]
     
+    #Add events to the original c3d file
+    c3dHelper.addEvents(trialName + '.c3d')
+    
     #Add the functional joint centres to the current trial
-    osimHelper.addFunctionalJointCentres(trialName + '.c3d', shoulderC3D = 'Circumduction01.c3d', filtFreq = 6)
+    c3dHelper.addFunctionalJointCentres(trialName + '.c3d', shoulderC3D = 'Circumduction01.c3d', filtFreq = 6)
     
     #Convert current trial C3D to TRC
     trialC3D = os.getcwd() + '\\' + trialName + '_withJointCentres.c3d'
     dynamicMarkerList = ['R.ACR','R.SJC','MCLAV','C7','T10','R.PUA.Top',
                   'R.PUA.Left','R.PUA.Right','R.LUA.Top','R.LUA.Left',
                   'R.LUA.Right','R.MWRI','R.LWRI','R.FA.Top',
-                  'R.FA.Left','R.FA.Right','R.HAND']
-    osimHelper.btk_c3d2trc(trialC3D,dynamicMarkerList, filtFreq = 6)
+                  'R.FA.Left','R.FA.Right']
+    c3dHelper.c3d2trc(trialC3D,dynamicMarkerList, filtFreq = 6)
     
     #General inputs for IK
     markerFile = os.getcwd() + '\\' + trialName + '_withJointCentres.trc'
@@ -96,77 +100,169 @@ for t in range(0,len(trialList)):
     outputDir = os.getcwd() + '\\' + trialName
     ikTaskSet = os.path.split(modelFile)[0] + '\Deakin_UpperLimb_RightSideOnly_IKTaskSet.xml'
     
+    #Shift to output directory for current trial
+    os.chdir(outputDir)
+    
     #Identify time ranges for trials
     if 'UpwardReach' in trialName:
         
-        #Use the horizontal velocity of the hand marker to see where it starts
-        #moving forward and backwards to identify movement segments
-        #Read in the trc file
-        readerTRC = btk.btkAcquisitionFileReader()        
-        #Load in experimental c3d trial
-        readerTRC.SetFilename(os.getcwd() + '\\' + trialName + '_withJointCentres.trc')       
-        #Update reader
-        readerTRC.Update()
-        #Get the btk acquisition object
-        acqTRC = readerTRC.GetOutput() 
-        #Get the X-axis hand marker data
-        xHand = acqTRC.GetPoint('R.HAND').GetValues()[:,0]
-        #Calculate the difference between subsequent marker positions
-        xHandDiff = np.diff(xHand)
-        #Find the first element with a negative value (skipping over the first
-        #few frames to avoid any movements at the beginning). This will indicate
-        #the index where the weight has been picked off the shelf. This also 
-        #uses a threshold of -0.05 to avoid any small movements
-        liftOff1 = np.where(xHandDiff[100:-1] < -0.05)[0][0] + 100
-        #The next point where positive data occurs will be the reach to put the
-        #weight back on the shelf
-        putBack1 = np.where(xHandDiff[liftOff1:-1] > 0.05)[0][0] + liftOff1
-        #The next negative point after this will be the point where the weight 
-        #has been placed back on the shelf
-        liftOff2  = np.where(xHandDiff[putBack1:-1] < -0.05)[0][0] + putBack1
-        #Get the times of the relevant events from the TRC file for IK
-        #Create a time vector based on frame numbers and sample rate
-        ff = acqTRC.GetFirstFrame(); lf = acqTRC.GetLastFrame(); fs = acqTRC.GetPointFrequency()
-        time = np.arange(ff * (1/fs), lf * (1/fs), 1/fs)
-        #Get start and end times for different components of the movement
-        #First component will be the concentric, second the eccentric
-        conStart = time[putBack1]; conEnd = time[liftOff2]
-        eccStart = time[liftOff1]; eccEnd = time[putBack1-1]
-        #Cleanup
-        del(xHand,xHandDiff,liftOff1,liftOff2,putBack1,ff,time)
+        #Create and run separate IK files for the concetric and eccentric parts        
+        #Get the start and end times for each movement part from the c3d file
         
-        #Shift to output directory for current trial
-        os.chdir(outputDir)
+        #Get the c3d data
+        c3dData = btk.btkAcquisitionFileReader()
+        c3dData.SetFilename(trialC3D)
+        c3dData.Update()
+        c3dAcq = c3dData.GetOutput() 
         
-        #Create and run separate IK files for the various start and end times for the task
+        #Get the events data labels and times
+        eventLabels = [None] * c3dAcq.GetEventNumber()
+        eventTimes = {}
+        for eventNo in range(0,c3dAcq.GetEventNumber()):
+            eventLabels[eventNo] = c3dAcq.GetEvent(eventNo).GetLabel()
+            eventTimes[eventLabels[eventNo]] = c3dAcq.GetEvent(eventNo).GetTime()
+
+        #Run IK on the separate concentric and eccentric parts
         for n in range(0,2):
             if n == 0:
                 #Set the time range
-                timeRange = conStart,conEnd
+                timeRange = eventTimes['conStart'],eventTimes['conEnd']
                 #Set the trial name
                 trialNameIK = trialName + '_Concentric'
                 #Generate and run IK tool
                 osimHelper.setup_IKTool(modelFile = modelFile, markerFile = markerFile,
                     outputDir = outputDir, ikTaskSet = ikTaskSet,
                     trialName = trialNameIK, timeRange = timeRange)
-                
-                ##### TO DO: write setup for eccentric
-                ##### TO DO: the IK function just doesn't seem to run here???
-            
-    
-    
-    
-    
-    ##### TO DO: split into sections based on events
-    
-    timeRange = None
-    
-    
-    #Generate and run scale tool
-    osimHelper.setup_IKTool(modelFile = modelFile, markerFile = markerFile,
+                #Rename generic IK outputs
+                os.rename('_ik_marker_errors.sto',trialNameIK + '_ik_marker_errors.sto')
+                os.rename('_ik_model_marker_locations.sto',trialNameIK + '_ik_model_marker_locations.sto')
+                #Cleanup
+                del(timeRange,trialNameIK)
+            else:
+                #Set the time range
+                timeRange = eventTimes['eccStart'],eventTimes['eccEnd']
+                #Set the trial name
+                trialNameIK = trialName + '_Eccentric'
+                #Generate and run IK tool
+                osimHelper.setup_IKTool(modelFile = modelFile, markerFile = markerFile,
                     outputDir = outputDir, ikTaskSet = ikTaskSet,
-                    trialName = trialName)
+                    trialName = trialNameIK, timeRange = timeRange)
+                #Rename generic IK outputs
+                os.rename('_ik_marker_errors.sto',trialNameIK + '_ik_marker_errors.sto')
+                os.rename('_ik_model_marker_locations.sto',trialNameIK + '_ik_model_marker_locations.sto')
+                #Cleanup
+                del(timeRange,trialNameIK)
+                
+        #Return to experimental data directory
+        os.chdir('..')
+        
+        #Cleanup
+        del(eventLabels,eventTimes,eventNo)
+        
+    ##### TO DO: add other elseif statements for other trial types
+            
+# %% Run inverse muscle drive solutions using MoCo
 
+#Loop through trials    
+for t in range(0,len(trialList)):
+    
+    #Get trial names for current iteration
+    trialName = trialList[t]
+    if 'UpwardReach' in trialName:
+        trialIterations = list([trialName + '_Concentric',trialName + '_Eccentric'])
+    ##### TO DO: add other elseif for trials
+    
+    #Navigate to trial directory
+    os.chdir(trialName)
+    
+    #Loop through trial iterations
+    for k in range(0,len(trialIterations)):
+        
+        ##### TO DO: place the inverse stuff in the functions file
+        
+        #Generate the inverse solution setup file
+        inverse = osim.MocoInverse();
+        
+        #Load the desired model
+        osimModel = osim.Model(modelFile)
+        
+        #Lock the thorax joints of the model to make this a shoulder only movement
+        coordSet = osimModel.updCoordinateSet()
+        coordSet.get('thorax_tilt').set_locked(True)
+        coordSet.get('thorax_list').set_locked(True)
+        coordSet.get('thorax_rotation').set_locked(True)
+        coordSet.get('thorax_tx').set_locked(True)
+        coordSet.get('thorax_ty').set_locked(True)
+        coordSet.get('thorax_tz').set_locked(True)
+        
+        #Add torque actuators to the 
+        for c in range(0,coordSet.getSize()):
+            if 'elbow_flexion' in coordSet.get(c).getName():
+                #Add an idealised torque actuator (optimal force = 150)
+                osimHelper.addCoordinateActuator(osimModel, coordSet.get(c).getName(), 150)
+            elif 'pro_sup' in coordSet.get(c).getName():
+                #Add an idealised torque actuator (optimal force = 75)
+                osimHelper.addCoordinateActuator(osimModel, coordSet.get(c).getName(), 75)
+            elif 'elv_angle' in coordSet.get(c).getName() \
+            or 'shoulder_elv' in coordSet.get(c).getName() \
+            or 'shoulder_rot' in  coordSet.get(c).getName():
+                #Add low level reserve actuator (optimal force = 1)
+                osimHelper.addCoordinateActuator(osimModel, coordSet.get(c).getName(), 1)
+        
+        #Replace the muscles in the model with muscles from DeGroote, Fregly, 
+        #et al. 2016, "Evaluation of Direct Collocation Optimal Control Problem 
+        #Formulations for Solving the Muscle Redundancy Problem". These muscles
+        #have the same properties as the original muscles but their characteristic
+        #curves are optimized for direct collocation (i.e. no discontinuities, 
+        #twice differentiable, etc).
+        osim.DeGrooteFregly2016Muscle().replaceMuscles(osimModel)
+        
+        #Turn off muscle-tendon dynamics to keep the problem simple.
+        #This is probably already done in the model anyway
+        for m in range(0,osimModel.getMuscles().getSize()):
+            osimModel.updMuscles().get(m).set_ignore_tendon_compliance(True)
+        
+        #Generate appropriate output file from kinematics for inverse tool
+        
+        ##### TO DO: one reason solver was crashing was possibly due to the 
+        ##### kinematics not being in states format. Need to generate appropriate
+        ##### file or check if this is the case...
+            
+        #Settings for inverse tool
+        #inverse.setKinematicsFile(os.getcwd() + '\\' + trialIterations[k] + '_ik.mot')
+        #inverse.setKinematicsFile(os.getcwd() + '\\' + 'MR_StatesReporter_states.sto')
+        #Set cut-off frequency for kinematics
+        inverse.set_lowpass_cutoff_frequency_for_kinematics(6)
+        #Set mesh interval
+        inverse.set_mesh_interval(0.05)
+        #Set cost function
+        inverse.set_minimize_sum_squared_states(True)
+        #Set tolerance
+        inverse.set_tolerance(1e-4)
+        inverse.set_kinematics_allow_extra_columns(True)
+        #Set append paths
+        inverse.append_output_paths('.*states')
+        #Set ignore tendon compliance
+        inverse.set_ignore_tendon_compliance(True)
+        
+        #Set model
+        inverse.setModel(osimModel)
+        
+        ##### TO DO: Model seems to have issues loading when the assembly 
+        ##### tolerance is too strict - this might be the issue causing the tool
+        ##### to crash as it didn't seem to get past the load model stage.
+        ##### Figure out a way to edit this before running tool...
+        
+        #Run solver
+        print('Beginning inverse optimisation for ' + trialIterations[k])
+        inverse.solve()
+        print('Completed inverse optimisation for ' + trialIterations[k])
+        
+        
+   
+
+    
+    
 
 
 
