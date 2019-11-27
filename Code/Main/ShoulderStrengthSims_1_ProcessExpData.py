@@ -26,7 +26,7 @@ os.chdir('..\..')
 os.chdir('ExpData')
 
 #Add the functional joint centres to the static calibration trial ('Cal_Horizontal01.c3d')
-c3dHelper.addFunctionalJointCentres('Cal_Horizontal01.c3d', shoulderC3D = 'Circumduction01.c3d', elbowC3D = 'ElbowFlex01.c3d', filtFreq = 6)
+c3dHelper.addFunctionalJointCentres('Cal_Horizontal01.c3d', shoulderC3D = 'ExtremeArc01.c3d', elbowC3D = 'ElbowFlex01.c3d', filtFreq = 6)
 
 #Scale model from calibration trial
 
@@ -83,7 +83,7 @@ for t in range(0,len(trialList)):
     c3dHelper.addEvents(trialName + '.c3d')
     
     #Add the functional joint centres to the current trial
-    c3dHelper.addFunctionalJointCentres(trialName + '.c3d', shoulderC3D = 'Circumduction01.c3d', filtFreq = 6)
+    c3dHelper.addFunctionalJointCentres(trialName + '.c3d', shoulderC3D = 'ExtremeArc01.c3d', filtFreq = 6)
     
     #Convert current trial C3D to TRC
     trialC3D = os.getcwd() + '\\' + trialName + '_withJointCentres.c3d'
@@ -163,106 +163,171 @@ for t in range(0,len(trialList)):
             
 # %% Run inverse muscle drive solutions using MoCo
 
-#Loop through trials    
-for t in range(0,len(trialList)):
-    
-    #Get trial names for current iteration
-    trialName = trialList[t]
-    if 'UpwardReach' in trialName:
-        trialIterations = list([trialName + '_Concentric',trialName + '_Eccentric'])
-    ##### TO DO: add other elseif for trials
-    
-    #Navigate to trial directory
-    os.chdir(trialName)
-    
-    #Loop through trial iterations
-    for k in range(0,len(trialIterations)):
-        
-        ##### TO DO: place the inverse stuff in the functions file
-        
-        #Generate the inverse solution setup file
-        inverse = osim.MocoInverse();
-        
-        #Load the desired model
-        osimModel = osim.Model(modelFile)
-        
-        #Lock the thorax joints of the model to make this a shoulder only movement
-        coordSet = osimModel.updCoordinateSet()
-        coordSet.get('thorax_tilt').set_locked(True)
-        coordSet.get('thorax_list').set_locked(True)
-        coordSet.get('thorax_rotation').set_locked(True)
-        coordSet.get('thorax_tx').set_locked(True)
-        coordSet.get('thorax_ty').set_locked(True)
-        coordSet.get('thorax_tz').set_locked(True)
-        
-        #Add torque actuators to the 
-        for c in range(0,coordSet.getSize()):
-            if 'elbow_flexion' in coordSet.get(c).getName():
-                #Add an idealised torque actuator (optimal force = 150)
-                osimHelper.addCoordinateActuator(osimModel, coordSet.get(c).getName(), 150)
-            elif 'pro_sup' in coordSet.get(c).getName():
-                #Add an idealised torque actuator (optimal force = 75)
-                osimHelper.addCoordinateActuator(osimModel, coordSet.get(c).getName(), 75)
-            elif 'elv_angle' in coordSet.get(c).getName() \
-            or 'shoulder_elv' in coordSet.get(c).getName() \
-            or 'shoulder_rot' in  coordSet.get(c).getName():
-                #Add low level reserve actuator (optimal force = 1)
-                osimHelper.addCoordinateActuator(osimModel, coordSet.get(c).getName(), 1)
-        
-        #Replace the muscles in the model with muscles from DeGroote, Fregly, 
-        #et al. 2016, "Evaluation of Direct Collocation Optimal Control Problem 
-        #Formulations for Solving the Muscle Redundancy Problem". These muscles
-        #have the same properties as the original muscles but their characteristic
-        #curves are optimized for direct collocation (i.e. no discontinuities, 
-        #twice differentiable, etc).
-        osim.DeGrooteFregly2016Muscle().replaceMuscles(osimModel)
-        
-        #Turn off muscle-tendon dynamics to keep the problem simple.
-        #This is probably already done in the model anyway
-        for m in range(0,osimModel.getMuscles().getSize()):
-            osimModel.updMuscles().get(m).set_ignore_tendon_compliance(True)
-        
-        #Generate appropriate output file from kinematics for inverse tool
-        
-        ##### TO DO: one reason solver was crashing was possibly due to the 
-        ##### kinematics not being in states format. Need to generate appropriate
-        ##### file or check if this is the case...
-            
-        #Settings for inverse tool
-        #inverse.setKinematicsFile(os.getcwd() + '\\' + trialIterations[k] + '_ik.mot')
-        #inverse.setKinematicsFile(os.getcwd() + '\\' + 'MR_StatesReporter_states.sto')
-        #Set cut-off frequency for kinematics
-        inverse.set_lowpass_cutoff_frequency_for_kinematics(6)
-        #Set mesh interval
-        inverse.set_mesh_interval(0.05)
-        #Set cost function
-        inverse.set_minimize_sum_squared_states(True)
-        #Set tolerance
-        inverse.set_tolerance(1e-4)
-        inverse.set_kinematics_allow_extra_columns(True)
-        #Set append paths
-        inverse.append_output_paths('.*states')
-        #Set ignore tendon compliance
-        inverse.set_ignore_tendon_compliance(True)
-        
-        #Set model
-        inverse.setModel(osimModel)
-        
-        ##### TO DO: Model seems to have issues loading when the assembly 
-        ##### tolerance is too strict - this might be the issue causing the tool
-        ##### to crash as it didn't seem to get past the load model stage.
-        ##### Figure out a way to edit this before running tool...
-        
-        #Run solver
-        print('Beginning inverse optimisation for ' + trialIterations[k])
-        inverse.solve()
-        print('Completed inverse optimisation for ' + trialIterations[k])
-        
-        
-   
+##### Test a MoCo states tracking solution with shoulder kinematics
+##### Using generic Wu model
 
+#Load the desired model
+osimModel = osim.Model('X:\ShoulderInstability\MuscleStrengtheningSimulation\Models\BaselineModel.osim')
+
+#Lock the thorax joints of the model to make this a shoulder only movement
+coordSet = osimModel.updCoordinateSet()
+coordSet.get('thorax_tilt').set_locked(True)
+coordSet.get('thorax_list').set_locked(True)
+coordSet.get('thorax_rotation').set_locked(True)
+coordSet.get('thorax_tx').set_locked(True)
+coordSet.get('thorax_ty').set_locked(True)
+coordSet.get('thorax_tz').set_locked(True)
+
+#Add torque actuators to the 
+for c in range(0,coordSet.getSize()):
+    if 'elbow_flexion' in coordSet.get(c).getName():
+        #Add an idealised torque actuator (optimal force = 150)
+        osimHelper.addCoordinateActuator(osimModel, coordSet.get(c).getName(), 150)
+    elif 'pro_sup' in coordSet.get(c).getName():
+        #Add an idealised torque actuator (optimal force = 75)
+        osimHelper.addCoordinateActuator(osimModel, coordSet.get(c).getName(), 75)
+    elif 'elv_angle' in coordSet.get(c).getName() \
+    or 'shoulder_elv' in coordSet.get(c).getName() \
+    or 'shoulder_rot' in  coordSet.get(c).getName():
+        #Add low level reserve actuator (optimal force = 1)
+        osimHelper.addCoordinateActuator(osimModel, coordSet.get(c).getName(), 1)
+
+#Replace the muscles in the model with muscles from DeGroote, Fregly, 
+#et al. 2016, "Evaluation of Direct Collocation Optimal Control Problem 
+#Formulations for Solving the Muscle Redundancy Problem". These muscles
+#have the same properties as the original muscles but their characteristic
+#curves are optimized for direct collocation (i.e. no discontinuities, 
+#twice differentiable, etc).
+osim.DeGrooteFregly2016Muscle().replaceMuscles(osimModel)
+
+#Turn off muscle-tendon dynamics to keep the problem simple.
+#This is probably already done in the model anyway
+for m in range(0,osimModel.getMuscles().getSize()):
+    osimModel.updMuscles().get(m).set_ignore_tendon_compliance(True)
     
+#Create moco tool
+moco = osim.MocoTool();
+
+#Configure the solver.
+solver = moco.initCasADiSolver();
+solver.set_num_mesh_points(25);
+solver.set_dynamics_mode('implicit');
+solver.set_optim_convergence_tolerance(1e-4);
+solver.set_optim_constraint_tolerance(1e-4);
+solver.set_optim_solver('ipopt');
+solver.set_transcription_scheme('hermite-simpson');
+solver.set_enforce_constraint_derivatives(True);
+solver.set_optim_hessian_approximation('limited-memory');
+solver.set_optim_finite_difference_scheme('forward');
     
+#Set bounds on the problem.
+problem = moco.updProblem();
+
+#Set the time bounds (from kinematics file)
+problem.setTimeBounds(osim.MocoInitialBounds(3.572), osim.MocoFinalBounds(6.044))
+
+#Set kinematic bounds (mins and maxes)
+
+#Shoulder elevation
+charValue = '/jointset/' + coordSet.get('shoulder_elv').getJoint().getName() + '/' + coordSet.get('shoulder_elv').getName() + '/value';
+charSpeed = '/jointset/' + coordSet.get('shoulder_elv').getJoint().getName() + '/' + coordSet.get('shoulder_elv').getName() + '/speed';
+mn = coordSet.get('shoulder_elv').getRangeMin();
+mx = coordSet.get('shoulder_elv').getRangeMax();
+problem.setStateInfo(charValue,osim.MocoBounds(mn,mx))
+problem.setStateInfo(charSpeed,osim.MocoBounds(-50,50));
+del(mn,mx,charValue,charSpeed)
+
+#Shoulder rotation
+charValue = '/jointset/' + coordSet.get('shoulder_rot').getJoint().getName() + '/' + coordSet.get('shoulder_rot').getName() + '/value';
+charSpeed = '/jointset/' + coordSet.get('shoulder_rot').getJoint().getName() + '/' + coordSet.get('shoulder_rot').getName() + '/speed';
+mn = coordSet.get('shoulder_rot').getRangeMin();
+mx = coordSet.get('shoulder_rot').getRangeMax();
+problem.setStateInfo(charValue,osim.MocoBounds(mn,mx))
+problem.setStateInfo(charSpeed,osim.MocoBounds(-50,50));
+del(mn,mx,charValue,charSpeed)
+
+#Elevation plane
+charValue = '/jointset/' + coordSet.get('elv_angle').getJoint().getName() + '/' + coordSet.get('elv_angle').getName() + '/value';
+charSpeed = '/jointset/' + coordSet.get('elv_angle').getJoint().getName() + '/' + coordSet.get('elv_angle').getName() + '/speed';
+mn = coordSet.get('elv_angle').getRangeMin();
+mx = coordSet.get('elv_angle').getRangeMax();
+problem.setStateInfo(charValue,osim.MocoBounds(mn,mx))
+problem.setStateInfo(charSpeed,osim.MocoBounds(-50,50));
+del(mn,mx,charValue,charSpeed)
+
+#Elbow angle
+charValue = '/jointset/' + coordSet.get('elbow_flexion').getJoint().getName() + '/' + coordSet.get('elbow_flexion').getName() + '/value';
+charSpeed = '/jointset/' + coordSet.get('elbow_flexion').getJoint().getName() + '/' + coordSet.get('elbow_flexion').getName() + '/speed';
+mn = coordSet.get('elbow_flexion').getRangeMin();
+mx = coordSet.get('elbow_flexion').getRangeMax();
+problem.setStateInfo(charValue,osim.MocoBounds(mn,mx))
+problem.setStateInfo(charSpeed,osim.MocoBounds(-50,50));
+del(mn,mx,charValue,charSpeed)
+
+#Forearm
+charValue = '/jointset/' + coordSet.get('pro_sup').getJoint().getName() + '/' + coordSet.get('pro_sup').getName() + '/value';
+charSpeed = '/jointset/' + coordSet.get('pro_sup').getJoint().getName() + '/' + coordSet.get('pro_sup').getName() + '/speed';
+mn = coordSet.get('pro_sup').getRangeMin();
+mx = coordSet.get('pro_sup').getRangeMax();
+problem.setStateInfo(charValue,osim.MocoBounds(mn,mx))
+problem.setStateInfo(charSpeed,osim.MocoBounds(-50,50));
+del(mn,mx,charValue,charSpeed)
+
+#Set the muscle activation state bounds
+#Set initial activation to be zero
+for m in range(0,osimModel.getMuscles().getSize()):
+    #Get current muscle name
+    muscName = osimModel.updMuscles().get(m).getName();
+    #Create state string for setting state info
+    stateStr = '/forceset/' + muscName + '/activation';
+    #Set activation bounds. Include a specification that initial activation
+    #must be zero for the majority of movements, with the exception of the
+    #abduction 90-180 and abduction/external rotation 0-90 movements - as
+    #these do not start in a neutral position
+    problem.setStateInfo(stateStr,osim.MocoBounds(0,1))
+    #Cleanup
+    del(muscName,stateStr)
+del(m)
+
+#Update problem
+problem = moco.updProblem();
+
+#Finalise model connections
+osimModel.finalizeConnections();
+
+#Set model to the moco problem
+problem.setModelCopy(osimModel);
+
+#Set cost functions for task
+
+#States tracking problem for the shoulder kinematics
+statesCost = osim.MocoStateTrackingCost('statesCost',5)
+#theoretically could load the relevant data into a time series table
+statesCost.setReferenceFile('X:\ShoulderInstability\MuscleStrengtheningSimulation\shoulder-strength-sims\ExpData\UpwardReach9001\MR_JustShoulderKinematicStates.sto')
+
+#Add the end point cost with a matched effort cost
+problem.addCost(statesCost)
+problem.addCost(osim.MocoControlCost('effort',1));
+
+#Update the solver
+
+#Update the underlying MocoCasADiSolver with the new problem.
+solver = osim.MocoCasADiSolver.safeDownCast(moco.updSolver());
+solver.resetProblem(problem);
+
+#Set guess
+solver.setGuess('bounds');
+
+#Run predictive problem
+solution = moco.solve();
+
+### states based tracking took 56 minutes but generated OK looking muscle 
+### activations for the movement - given only 25 mesh points were used they 
+### were a little 'spiky' in parts, but this wasn't over the top...
+
+
+# %%
+
 
 
 
